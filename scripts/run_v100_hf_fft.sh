@@ -1,16 +1,15 @@
-#!/usr/bin/env bash
-set -euo pipefail
+# text-only niceties
 export TRANSFORMERS_NO_TORCHVISION=1
 export TOKENIZERS_PARALLELISM=true
-# cache to speed up later runs
 mkdir -p ~/.triton && export TRITON_CACHE_DIR=~/.triton
 
+# HF LoRA baseline (fp16, no quant)
 python train_compare.py \
-  --framework unsloth \
+  --framework hf \
   --model_name Qwen/Qwen2.5-3B-Instruct \
   --train_type lora \
   --gpu v100 \
-  --precision fp16 \
+  --precision fp32 \
   --quant none \
   --seq_len 1024 \
   --epochs 1 \
@@ -19,8 +18,8 @@ python train_compare.py \
   --dataset_path yentinglin/TaiwanChat \
   --dataset_split "train[:50]" \
   --sample_size 50 \
-  --export_vllm_dir exports/qwen25_7b_lora_v100_smoke \
-  --log_json results/unsloth_qwen25_7b_lora_v100_smoke.json
+  --export_vllm_dir exports/hf_qwen25_3b_lora_v100_smoke \
+  --log_json results/hf_qwen25_3b_lora_v100_smoke.json
 
-cat results/unsloth_qwen25_7b_lora_v100_smoke.json
-echo "Process Finished"
+echo results/hf_qwen25_3b_lora_v100_smoke.json
+

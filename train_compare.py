@@ -1,12 +1,11 @@
+# ./train_compare.py
 import argparse, os, json, time
 from dataclasses import dataclass
-
-from trainers.unsloth_trainer import run_unsloth
 
 def build_args():
     ap = argparse.ArgumentParser()
     # experiment axes
-    ap.add_argument("--framework", choices=["unsloth"], default="unsloth")
+    ap.add_argument("--framework", choices=["unsloth","hf"], default="unsloth")
     ap.add_argument("--model_name", required=True, help="e.g. meta-llama/Meta-Llama-3.1-8B")
     ap.add_argument("--train_type", choices=["full", "lora", "qlora"], required=True)
     ap.add_argument("--gpu", choices=["v100", "h100"], required=True)
@@ -25,6 +24,7 @@ def build_args():
     ap.add_argument("--lora_r", type=int, default=16)
     ap.add_argument("--lora_alpha", type=int, default=16)
     ap.add_argument("--lora_dropout", type=float, default=0.05)
+    ap.add_argument("--eval_ratio", type=float, default=0.1)
     # output / logging
     ap.add_argument("--output_dir", default="out/unsloth_run")
     ap.add_argument("--export_vllm_dir", default="exports/unsloth_merged_vllm")
@@ -53,8 +53,12 @@ def main():
     os.makedirs(os.path.dirname(args.log_json), exist_ok=True)
     os.makedirs(args.output_dir, exist_ok=True)
     os.makedirs(args.export_vllm_dir, exist_ok=True)
-
-    metrics = run_unsloth(args)  # returns dict
+    if args.framework == "unsloth":
+        from trainers.unsloth_trainer import run_unsloth
+        metrics = run_unsloth(args)
+    else:
+        from trainers.hf_trainer import run_hf
+        metrics = run_hf(args)   
     with open(args.log_json, "w", encoding="utf-8") as f:
         json.dump(metrics, f, ensure_ascii=False, indent=2)
     print(f"[OK] metrics saved -> {args.log_json}")
