@@ -17,8 +17,10 @@ python train_compare.py \
   --bsz 1 \
   --grad_accum 4 \
   --dataset_path yentinglin/TaiwanChat \
-  --dataset_split "train[:500]" \
-  --sample_size 500 \
+  --dataset_split "train[:50]" \
+  --sample_size 50 \
   --export_vllm_dir exports/qwen25_7b_lora_v100_smoke \
   --log_json results/unsloth_qwen25_7b_lora_v100_smoke.json
 
+cat results/unsloth_qwen25_7b_lora_v100_smoke.json
+echo "Process Finished"

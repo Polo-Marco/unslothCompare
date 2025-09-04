@@ -1,8 +1,8 @@
 {
-  "tokens_per_sec_est": 1076.78,
+  "tokens_per_sec_est": 1023.31,
   "peak_vram_gb": 15.654,
-  "wall_clock_sec": 475.49,
-  "train_steps": 125,
+  "wall_clock_sec": 48.03,
+  "train_steps": 12,
   "config": {
     "model_name": "Qwen/Qwen2.5-7B-Instruct",
     "train_type": "lora",
@@ -18,7 +18,7 @@
   "output_dir": "out/unsloth_run",
   "dataset": {
     "path": "yentinglin/TaiwanChat",
-    "split": "train[:500]",
-    "size": 500
+    "split": "train[:50]",
+    "size": 50
   }
 }
