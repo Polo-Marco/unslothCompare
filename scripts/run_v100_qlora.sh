@@ -10,7 +10,7 @@ python train_compare.py \
   --model_name Qwen/Qwen2.5-3B-Instruct \
   --train_type qlora \
   --gpu v100 \
-  --precision fp16 \
+  --precision fp32 \
   --quant none \
   --seq_len 4096 \
   --epochs 1 \

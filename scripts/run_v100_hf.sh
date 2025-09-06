@@ -12,12 +12,12 @@ python train_compare.py \
   --precision fp32 \
   --quant none \
   --seq_len 1024 \
-  --epochs 1 \
+  --epochs 5 \
   --bsz 1 \
   --grad_accum 4 \
   --dataset_path yentinglin/TaiwanChat \
-  --dataset_split "train[:50]" \
-  --sample_size 50 \
+  --dataset_split "train[:100]" \
+  --sample_size 100 \
   --export_vllm_dir exports/hf_qwen25_3b_lora_v100_smoke \
   --log_json results/hf_qwen25_3b_lora_v100_smoke.json
 

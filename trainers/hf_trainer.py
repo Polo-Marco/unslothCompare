@@ -2,18 +2,17 @@
 import os, time, math
 from typing import Dict, Any, List
 import torch
+from torch import nn
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
     BitsAndBytesConfig,
-    DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
+    default_data_collator,
 )
 from peft import LoraConfig, get_peft_model
-from trainers.utils import set_seed, cuda_mem_snapshot
-# we keep save_for_vllm import if you use it here; else remove
-from trainers.utils import save_for_vllm
+from trainers.utils import set_seed, cuda_mem_snapshot, save_for_vllm
 from dataset.zh_tw_loader import load_zh_tw_sft
 
 DTYPE_MAP = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}
@@ -57,9 +56,24 @@ def _make_model_and_tok(args):
 
     return model, tok
 
-def _tokenize(tok, seq_len: int):
+def _tokenize_with_masked_labels(tok, seq_len: int):
+    """Tokenize and set labels=input_ids, with pad positions masked to -100."""
     def _fn(batch):
-        return tok(batch["text"], truncation=True, max_length=seq_len, padding="max_length")
+        enc = tok(
+            batch["text"],
+            truncation=True,
+            max_length=seq_len,
+            padding="max_length",
+        )
+        # enc["input_ids"], enc["attention_mask"] are lists of lists
+        input_ids = enc["input_ids"]
+        attn = enc["attention_mask"]
+        labels = []
+        for ids, m in zip(input_ids, attn):
+            # mask pads (where attention_mask==0) with -100
+            labels.append([tid if am == 1 else -100 for tid, am in zip(ids, m)])
+        enc["labels"] = labels
+        return enc
     return _fn
 
 def _avg_losses_from_log(log_history: List[dict]):
@@ -67,6 +81,27 @@ def _avg_losses_from_log(log_history: List[dict]):
     last = losses[-1] if losses else None
     mean = sum(losses)/len(losses) if losses else None
     return mean, last
+
+class FP32LossTrainer(Trainer):
+    """Compute loss in fp32 for stability even if model runs in fp16."""
+    def compute_loss(self, model, inputs, return_outputs=False, **kwargs):
+        labels = inputs.get("labels", None)
+        # forward without labels to get logits; compute loss ourselves in fp32 if needed
+        outputs = model(**{k: v for k, v in inputs.items() if k != "labels"})
+        loss = outputs.get("loss", None)
+
+        if loss is None:
+            # manual CE in fp32 (causal LM shift)
+            logits = outputs["logits"].float()  # upcast to fp32
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous() if labels is not None else None
+            loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)),
+                            shift_labels.view(-1))
+        else:
+            loss = loss.float()  # ensure fp32 scalar
+
+        return (loss, outputs) if return_outputs else loss
 
 def run_hf(args) -> Dict[str, Any]:
     set_seed(42)
@@ -82,17 +117,15 @@ def run_hf(args) -> Dict[str, Any]:
     else:
         ds_train, ds_eval = ds, None
 
-    tok_fn = _tokenize(tok, args.seq_len)
+    tok_fn = _tokenize_with_masked_labels(tok, args.seq_len)
     ds_train_tok = ds_train.map(tok_fn, batched=True, remove_columns=[c for c in ds_train.column_names if c != "text"])
-    ds_train_tok.set_format(type="torch", columns=["input_ids", "attention_mask"])
+    ds_train_tok.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
     ds_eval_tok = None
     if ds_eval is not None:
         ds_eval_tok = ds_eval.map(tok_fn, batched=True, remove_columns=[c for c in ds_eval.column_names if c != "text"])
-        ds_eval_tok.set_format(type="torch", columns=["input_ids", "attention_mask"])
+        ds_eval_tok.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
 
-    collator = DataCollatorForLanguageModeling(tokenizer=tok, mlm=False)
-
-    # ----- precision policy (pure FP16 on V100 to avoid GradScaler unscale error)
+    # ----- precision policy: pure FP16 on V100 (no GradScaler)
     want_fp16 = (args.precision == "fp16")
     want_bf16 = (args.precision == "bf16")
     force_no_scaler = (args.gpu.lower() == "v100" and want_fp16) or (os.getenv("HF_FORCE_NO_SCALER", "0") == "1")
@@ -112,11 +145,11 @@ def run_hf(args) -> Dict[str, Any]:
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.lr,
         warmup_ratio=0.03,
-        logging_steps=10,
+        logging_steps=25,
+        max_grad_norm=1.0,
         save_steps=0,
         report_to=[],
-        # ---- avoid HF eval path; we'll run manual eval below
-        eval_strategy="no",
+        eval_strategy="no",            # manual eval below
         remove_unused_columns=False,
         dataloader_drop_last=True,
         optim="adamw_torch",
@@ -124,14 +157,29 @@ def run_hf(args) -> Dict[str, Any]:
         bf16=(want_bf16 and not force_no_scaler),
     )
 
-    trainer = Trainer(
+    trainer = FP32LossTrainer(
         model=model,
         args=targs,
-        processing_class=tok,   # replaces deprecated tokenizer=
-        data_collator=collator,
+        processing_class=tok,
+        data_collator=default_data_collator,
         train_dataset=ds_train_tok,
-        eval_dataset=None,      # we¡¦ll eval manually
+        eval_dataset=None,  # manual eval
     )
+
+    # ----- quick probe (should be finite, non-zero)
+    try:
+        from torch.utils.data import DataLoader
+        probe = next(iter(DataLoader(ds_train_tok.select(range(1)),
+                                     batch_size=1, collate_fn=default_data_collator)))
+        for k in ("input_ids","attention_mask","labels"):
+            probe[k] = probe[k].to(model.device, non_blocking=True)
+        model.eval()
+        with torch.no_grad():
+            pout = model(**probe)
+        print("[hf] probe loss:", float(pout.loss))
+        model.train()
+    except Exception as e:
+        print(f"[hf] probe skipped: {e}")
 
     # ----- train
     if torch.cuda.is_available():
@@ -153,7 +201,8 @@ def run_hf(args) -> Dict[str, Any]:
     eval_ppl  = None
     if do_eval:
         from torch.utils.data import DataLoader
-        dl_eval = DataLoader(ds_eval_tok, batch_size=args.bsz, shuffle=False, drop_last=False, collate_fn=collator)
+        dl_eval = DataLoader(ds_eval_tok, batch_size=args.bsz, shuffle=False,
+                             drop_last=False, collate_fn=default_data_collator)
         model.eval()
         total, count = 0.0, 0
         with torch.no_grad():
@@ -170,7 +219,7 @@ def run_hf(args) -> Dict[str, Any]:
             except OverflowError:
                 eval_ppl = float("inf")
 
-    # ----- save / export (merge LoRA if present)
+    # ----- save / export
     os.makedirs(args.output_dir, exist_ok=True)
     trainer.save_model(args.output_dir)
     tok.save_pretrained(args.output_dir)

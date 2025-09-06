@@ -14,7 +14,7 @@ DATASET_PATH="yentinglin/TaiwanChat"
 GPU="v100"
 
 # --- Training Type Loop ---
-TRAIN_TYPES=("full" "lora" "qlora")
+TRAIN_TYPES=("lora" "qlora")
 QUANTS=("none")
 
 for train_type in "${TRAIN_TYPES[@]}"; do
@@ -25,20 +25,17 @@ for train_type in "${TRAIN_TYPES[@]}"; do
     case "${train_type}" in
         # Full fine-tuning requires significant VRAM. On a V100 GPU with a 3B model,
         # it is generally recommended to use fp16 to avoid Out-of-Memory (OOM) errors.
-        "full")
-            PRECISIONS=("fp16")
-            ;;
 
         # LoRA is a parameter-efficient fine-tuning method. It can be run with
         # different precisions and quantizations for comparison.
         "lora")
-            PRECISIONS=("fp32" "fp16")
+            PRECISIONS=("fp32" )
             ;;
 
         # QLoRA specifically uses 4-bit quantization, which is automatically handled
         # by Unsloth when the train_type is set to 'qlora'.
         "qlora")
-            PRECISIONS=("fp16") # QLoRA typically runs on fp16
+            PRECISIONS=("fp32") # QLoRA typically runs on fp16
             ;;
 
         *)

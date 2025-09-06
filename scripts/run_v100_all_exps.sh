@@ -37,7 +37,7 @@ for train_type in "${TRAIN_TYPES[@]}"; do
         # QLoRA specifically uses 4-bit quantization, which is automatically handled
         # by Unsloth when the train_type is set to 'qlora'.
         "qlora")
-            PRECISIONS=("fp16") # QLoRA typically runs on fp16
+            PRECISIONS=("fp32" "fp16") # QLoRA typically runs on fp16
             QUANTS=("none")    # The 'qlora' train_type handles 4-bit quantization
             ;;
 

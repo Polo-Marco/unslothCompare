@@ -2,3 +2,4 @@ results/
 out/
 exports/
 *.pyc
+nohup.out
